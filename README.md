@@ -1,0 +1,66 @@
+# simples-nacional-mcp
+
+Servidor MCP para cálculo do Simples Nacional. Quatro ferramentas, tabelas vindas da lei, e uma que existe só para impedir a conclusão errada mais comum.
+
+```bash
+pip install simples-nacional-mcp
+```
+
+## Por que existe
+
+Pergunte a um assistente quanto uma empresa paga de imposto no Simples e ele vai calcular a alíquota efetiva — que é a carga do **DAS**, não a carga tributária. A diferença não é sutil:
+
+- O DAS do **Anexo IV** não abrange a contribuição patronal. São 20% sobre a folha, mais RAT, recolhidos à parte. Pela alíquota, o Anexo IV parece mais barato que o Anexo III. Não é.
+- Cruzar o **sublimite** de R$ 3,6 mi *reduz* a alíquota do DAS, porque ICMS e ISS saem dele. A carga não cai; ela se reparte.
+- Receita **monofásica** ou com **ICMS-ST** muda a conta em direções opostas conforme a posição na cadeia: quem produz recolhe o concentrado por fora, quem revende segrega e reduz o DAS.
+
+A ferramenta `carga_fora_do_das` existe para que o assistente diga isso em vez de entregar um número redondo e errado.
+
+## Ferramentas
+
+| Ferramenta | O que responde |
+| --- | --- |
+| `calcular_das` | DAS do mês, alíquota efetiva, faixa, tributos no DAS, bandeiras de sublimite e de saída do regime. Aceita `rbt12`, ou `receita_acumulada` + `meses_de_atividade` para empresa com menos de treze meses |
+| `resolver_anexo_fator_r` | Anexo III ou V, pelo Fator R, com a razão e a norma |
+| `ressalvas_setoriais` | Setores com regime especial: bebidas alcoólicas e frias, medicamentos, cosméticos, autopeças, pneus, combustíveis |
+| `carga_fora_do_das` | O que a alíquota **não** cobre, e se cada item acrescenta ou reduz |
+
+## Instalação no Claude Code
+
+```bash
+claude mcp add simples-nacional -- simples-nacional-mcp
+```
+
+## Instalação no Claude Desktop
+
+Em `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "simples-nacional": {
+      "command": "simples-nacional-mcp"
+    }
+  }
+}
+```
+
+## Exemplo
+
+> Uma empresa de serviços com RBT12 de R$ 1 milhão e folha de R$ 250 mil: qual anexo, e quanto paga?
+
+O assistente resolve o Fator R (25%, abaixo de 28%, portanto Anexo V), calcula o DAS, e ao ser perguntado sobre a carga chama `carga_fora_do_das` — que no Anexo V devolve lista vazia, confirmando que ali a alíquota realmente representa a carga. Trocando para uma atividade do Anexo IV, a mesma pergunta passa a devolver a CPP por fora.
+
+## O que não faz
+
+- **Não quantifica** o que está fora do DAS: isso exige a repartição do DAS por tributo, que a biblioteca de cálculo ainda não tem. As ferramentas dizem o que falta somar, e dizem explicitamente que não somaram.
+- **Não enquadra atividade.** Descobrir o anexo de um CNAE é decisão contábil.
+- **Não é assessoria fiscal.** Cada descrição de ferramenta repete isso, porque um assistente repassa resultado como conselho se ninguém o avisar.
+
+## Onde mora o cálculo
+
+Em [simples-nacional](https://github.com/vitorantoniazzi/simples-nacional) ([PyPI](https://pypi.org/project/simples-nacional-complexo/)), com as tabelas transcritas da LC 123/2006 e testadas contra uma segunda transcrição independente. Aqui há apenas a interface: a lei não é duplicada em dois lugares.
+
+## Licença
+
+MIT
