@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "simples-nacional-mcp"
+version = "0.1.0"
+description = "Servidor MCP para cálculo do Simples Nacional: DAS, alíquota efetiva, Fator R e o que a alíquota não cobre."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Vitor Antoniazzi" }]
+keywords = ["mcp", "simples-nacional", "fiscal", "tributos", "brasil", "llm", "agent"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Natural Language :: Portuguese (Brazilian)",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial :: Accounting",
+    "Typing :: Typed",
+]
+dependencies = [
+    "mcp>=2.0",
+    "simples-nacional-complexo>=0.2.0",
+]
+
+[project.scripts]
+simples-nacional-mcp = "simples_nacional_mcp.server:main"
+
+[project.urls]
+Homepage = "https://github.com/vitorantoniazzi/simples-nacional-mcp"
+Issues = "https://github.com/vitorantoniazzi/simples-nacional-mcp/issues"
+"Biblioteca de cálculo" = "https://github.com/vitorantoniazzi/simples-nacional"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/simples_nacional_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+allowed-confusables = ["×", "−", "÷", "º"]
+
+[tool.mypy]
+strict = true
+python_version = "3.10"
