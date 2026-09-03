@@ -7,6 +7,7 @@ repassar ao usuário.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -20,6 +21,7 @@ TOOLS_ESPERADAS = {
     "resolver_anexo_fator_r",
     "ressalvas_setoriais",
     "carga_fora_do_das",
+    "quantificar_segregacao",
 }
 
 
@@ -196,3 +198,88 @@ class TestCargaForaDoDas:
         # Um agente que não for avisado vai inventar um número.
         out = await chamar("carga_fora_do_das", {"anexo": "IV"})
         assert "repartição do DAS por tributo" in out["nao_quantificado"]
+
+
+class TestQuantificarSegregacao:
+    async def test_bar_que_revende_cerveja_paga_a_mais_sem_segregar(self) -> None:
+        out = await chamar(
+            "quantificar_segregacao",
+            {
+                "anexo": "I",
+                "rbt12": "900000",
+                "receita_sem_regime_especial": "20000",
+                "receita_monofasica_e_com_icms_st": "60000",
+            },
+        )
+        assert out["das_sem_segregar"] == "6560.00"
+        assert out["das_segregado"] == "4149.20"
+        assert out["pago_a_mais_por_nao_segregar"] == "2410.80"
+
+    async def test_receita_sem_regime_especial_nao_gera_economia(self) -> None:
+        out = await chamar(
+            "quantificar_segregacao",
+            {"anexo": "I", "rbt12": "900000", "receita_sem_regime_especial": "50000"},
+        )
+        assert out["pago_a_mais_por_nao_segregar"] == "0.00"
+
+    async def test_monofasico_desconsidera_pis_e_cofins(self) -> None:
+        out = await chamar(
+            "quantificar_segregacao",
+            {"anexo": "I", "rbt12": "900000", "receita_monofasica": "50000"},
+        )
+        (cat,) = out["por_categoria"]
+        pesos = out["reparticao_da_faixa_pct"]
+        esperado = Decimal(pesos["PIS/PASEP"]) + Decimal(pesos["COFINS"])
+        assert Decimal(cat["percentual_desconsiderado"]) == esperado
+
+    async def test_icms_st_desconsidera_o_icms(self) -> None:
+        out = await chamar(
+            "quantificar_segregacao",
+            {"anexo": "I", "rbt12": "900000", "receita_com_icms_st": "50000"},
+        )
+        (cat,) = out["por_categoria"]
+        assert Decimal(cat["percentual_desconsiderado"]) == Decimal(
+            out["reparticao_da_faixa_pct"]["ICMS"]
+        )
+
+    async def test_acima_do_sublimite_o_icms_st_nao_muda_nada(self) -> None:
+        # Naquela faixa o ICMS já não integra o DAS, então não há o que excluir.
+        out = await chamar(
+            "quantificar_segregacao",
+            {"anexo": "I", "rbt12": "4000000", "receita_com_icms_st": "100000"},
+        )
+        assert out["pago_a_mais_por_nao_segregar"] == "0.00"
+        assert "não altera nada" in out["observacao"]
+
+    async def test_sem_receita_alguma_recusa_em_vez_de_devolver_zero(self) -> None:
+        with pytest.raises(ToolError):
+            await server.call_tool("quantificar_segregacao", {"anexo": "I", "rbt12": "900000"})
+
+    async def test_receita_negativa_e_recusada(self) -> None:
+        with pytest.raises(ToolError):
+            await server.call_tool(
+                "quantificar_segregacao",
+                {"anexo": "I", "rbt12": "900000", "receita_monofasica": "-1"},
+            )
+
+
+class TestReparticaoNoCalcularDas:
+    async def test_por_padrao_nao_inclui_a_reparticao(self) -> None:
+        out = await chamar(
+            "calcular_das",
+            {"anexo": "II", "rbt12": "1200000", "receita_do_mes": "100000"},
+        )
+        assert "das_por_tributo" not in out
+
+    async def test_sob_pedido_inclui_o_das_por_tributo(self) -> None:
+        out = await chamar(
+            "calcular_das",
+            {
+                "anexo": "II",
+                "rbt12": "1200000",
+                "receita_do_mes": "100000",
+                "incluir_reparticao": True,
+            },
+        )
+        assert out["das_por_tributo"]["ICMS"] == "2984.00"
+        assert out["reparticao_da_faixa_pct"]["ICMS"] == "32.00"

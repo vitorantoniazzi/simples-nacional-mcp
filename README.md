@@ -24,6 +24,21 @@ A ferramenta `carga_fora_do_das` existe para que o assistente diga isso em vez d
 | `resolver_anexo_fator_r` | Anexo III ou V, pelo Fator R, com a razão e a norma |
 | `ressalvas_setoriais` | Setores com regime especial: bebidas alcoólicas e frias, medicamentos, cosméticos, autopeças, pneus, combustíveis |
 | `carga_fora_do_das` | O que a alíquota **não** cobre, e se cada item acrescenta ou reduz |
+| `quantificar_segregacao` | Quanto se paga a mais por não segregar receita monofásica ou com ICMS-ST |
+
+## O número que ninguém calcula
+
+Um bar no Anexo I, RBT12 de R$ 900 mil, receita mensal de R$ 80 mil sendo R$ 60 mil em cerveja:
+
+| | |
+| --- | --- |
+| DAS sem segregar | R$ 6.560,00 |
+| DAS segregado | R$ 4.149,20 |
+| **Pago a mais** | **R$ 2.410,80/mês** |
+
+São 37% do DAS, quase R$ 29 mil por ano, e é indébito recuperável. Cerveja é monofásica de PIS/COFINS e tem ICMS-ST, então 49% da alíquota daquela faixa corresponde a tributos já recolhidos na cadeia.
+
+`quantificar_segregacao` calcula isso. Acima do sublimite ela avisa que segregar ICMS-ST não muda nada, porque ali o ICMS já não integra o DAS.
 
 ## Instalação no Claude Code
 
@@ -53,7 +68,7 @@ O assistente resolve o Fator R (25%, abaixo de 28%, portanto Anexo V), calcula o
 
 ## O que não faz
 
-- **Não quantifica** o que está fora do DAS: isso exige a repartição do DAS por tributo, que a biblioteca de cálculo ainda não tem. As ferramentas dizem o que falta somar, e dizem explicitamente que não somaram.
+- **`carga_fora_do_das` não quantifica.** Ela diz o que fica fora e em que direção; para números, use `quantificar_segregacao`, que calcula sobre a repartição do DAS por tributo.
 - **Não enquadra atividade.** Descobrir o anexo de um CNAE é decisão contábil.
 - **Não é assessoria fiscal.** Cada descrição de ferramenta repete isso, porque um assistente repassa resultado como conselho se ninguém o avisar.
 

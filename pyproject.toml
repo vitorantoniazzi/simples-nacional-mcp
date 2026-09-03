@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "simples-nacional-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "Servidor MCP para cálculo do Simples Nacional: DAS, alíquota efetiva, Fator R e o que a alíquota não cobre."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -25,7 +25,7 @@ classifiers = [
 ]
 dependencies = [
     "mcp>=2.0",
-    "simples-nacional-complexo>=0.2.0",
+    "simples-nacional-complexo>=0.3.0",
 ]
 
 [project.scripts]

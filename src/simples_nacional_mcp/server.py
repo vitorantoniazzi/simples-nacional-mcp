@@ -18,11 +18,14 @@ from simples_nacional import (
     TRIBUTOS_NO_DAS,
     Anexo,
     PosicaoNaCadeia,
+    Tributo,
     aliquota_efetiva,
     anexo_por_fator_r,
     carga_fora_do_das,
     das_devido,
+    das_por_tributo,
     fator_r,
+    reparticao_da_faixa,
     ressalvas_de,
     setores_registrados,
 )
@@ -87,6 +90,7 @@ def calcular_das(
     rbt12: float | int | str | None = None,
     receita_acumulada: float | int | str | None = None,
     meses_de_atividade: int | None = None,
+    incluir_reparticao: bool = False,
 ) -> dict[str, Any]:
     a = _anexo(anexo)
 
@@ -110,9 +114,20 @@ def calcular_das(
         origem_rbt12 = "informado"
 
     ap = aliquota_efetiva(base, a)
-    das = das_devido(_dinheiro(receita_do_mes, "receita_do_mes"), ap)
+    receita = _dinheiro(receita_do_mes, "receita_do_mes")
+    das = das_devido(receita, ap)
+
+    extra: dict[str, Any] = {}
+    if incluir_reparticao:
+        extra["das_por_tributo"] = {
+            t.value: str(v) for t, v in das_por_tributo(receita, ap).items()
+        }
+        extra["reparticao_da_faixa_pct"] = {
+            t.value: str(v) for t, v in reparticao_da_faixa(a, ap.faixa.numero).items()
+        }
 
     return {
+        **extra,
         "anexo": a.value,
         "anexo_descricao": a.descricao,
         "rbt12": str(base),
@@ -294,6 +309,94 @@ def carga_fora_do_das_tool(
         "nao_quantificado": (
             "Quantificar cada item exige a repartição do DAS por tributo, que "
             "não está disponível nesta versão."
+        ),
+        "aviso": _AVISO,
+    }
+
+
+@server.tool(
+    description=(
+        "Quantifica o efeito da segregação de receitas no DAS. Receita "
+        "monofásica de PIS/COFINS (bebidas, medicamentos, cosméticos, "
+        "autopeças, combustíveis) e receita com ICMS já retido por "
+        "substituição tributária devem ser segregadas: os percentuais dos "
+        "tributos já cobrados na cadeia são desconsiderados no cálculo. "
+        "Informe a receita do mês repartida entre as categorias e a "
+        "ferramenta devolve o DAS sem segregar, o DAS segregado, e a "
+        "diferença — que é o valor pago a mais por quem não segrega, e é "
+        "recuperável. Use para quem REVENDE mercadoria já tributada na "
+        "origem; quem produz é o responsável pelo recolhimento concentrado e "
+        "tem carga acima da alíquota, não abaixo. " + _AVISO
+    )
+)
+def quantificar_segregacao(
+    anexo: AnexoNome,
+    rbt12: float | int | str,
+    receita_sem_regime_especial: float | int | str = 0,
+    receita_monofasica: float | int | str = 0,
+    receita_com_icms_st: float | int | str = 0,
+    receita_monofasica_e_com_icms_st: float | int | str = 0,
+) -> dict[str, Any]:
+    a = _anexo(anexo)
+    ap = aliquota_efetiva(_dinheiro(rbt12, "rbt12"), a)
+    pesos = reparticao_da_faixa(a, ap.faixa.numero)
+
+    zero = Decimal("0")
+    peso_monofasico = pesos.get(Tributo.PIS, zero) + pesos.get(Tributo.COFINS, zero)
+    peso_icms = pesos.get(Tributo.ICMS, zero)
+
+    baldes = [
+        ("sem_regime_especial", receita_sem_regime_especial, zero),
+        ("monofasica", receita_monofasica, peso_monofasico),
+        ("com_icms_st", receita_com_icms_st, peso_icms),
+        ("monofasica_e_com_icms_st", receita_monofasica_e_com_icms_st, peso_monofasico + peso_icms),
+    ]
+
+    cem = Decimal("100")
+    detalhe = []
+    total_sem, total_com = zero, zero
+    for nome, valor, peso_fora in baldes:
+        receita = _dinheiro(valor, nome)
+        if receita < 0:
+            raise ValueError(f"{nome} não pode ser negativa: {receita}")
+        if receita == 0:
+            continue
+        sem = (receita * ap.aliquota_efetiva / cem).quantize(Decimal("0.01"))
+        fator = (cem - peso_fora) / cem
+        com = (receita * ap.aliquota_efetiva / cem * fator).quantize(Decimal("0.01"))
+        total_sem += sem
+        total_com += com
+        detalhe.append(
+            {
+                "categoria": nome,
+                "receita": str(receita),
+                "percentual_desconsiderado": str(peso_fora),
+                "das_sem_segregar": str(sem),
+                "das_segregado": str(com),
+                "economia": str(sem - com),
+            }
+        )
+
+    if not detalhe:
+        raise ValueError("informe ao menos uma das categorias de receita com valor maior que zero.")
+
+    return {
+        "anexo": a.value,
+        "faixa": ap.faixa.numero,
+        "aliquota_efetiva_pct": str(ap.aliquota_arredondada),
+        "reparticao_da_faixa_pct": {t.value: str(v) for t, v in pesos.items()},
+        "por_categoria": detalhe,
+        "das_sem_segregar": str(total_sem),
+        "das_segregado": str(total_com),
+        "pago_a_mais_por_nao_segregar": str(total_sem - total_com),
+        "observacao": (
+            "Acima do sublimite o ICMS já não integra o DAS, então segregar "
+            "receita com ICMS-ST não altera nada nesta faixa."
+            if Tributo.ICMS not in pesos
+            and (receita_com_icms_st or receita_monofasica_e_com_icms_st)
+            else "A diferença é o indébito de quem revende sem segregar. "
+            "Recuperá-lo depende de prazo prescricional e de escrituração; "
+            "confirme com contador."
         ),
         "aviso": _AVISO,
     }
