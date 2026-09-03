@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0
+
+Duas ferramentas novas, e a aritmética saiu daqui.
+
+- **`comparar_anexos`** põe os cinco anexos lado a lado por **carga total**, não por alíquota do DAS. Informando a folha, o Anexo IV deixa de parecer barato: para RBT12 de R$ 1 mi, receita de R$ 80 mil e folha de R$ 30 mil, ele mostra 10,02% de alíquota contra 12,44% do Anexo III e carga de 17,90% contra 12,44%. A ferramenta alerta quando a ordem se inverte, e avisa quando a folha não foi informada.
+- **`indebito_acumulado`** soma o indébito de várias competências e separa o que está no prazo de cinco anos do art. 168 do CTN do que prescreveu. Vinte meses do bar do exemplo: R$ 48.216,00 recuperáveis.
+- `quantificar_segregacao` passou a chamar a biblioteca em vez de recalcular. A matemática pertence ao pacote de cálculo; aqui é interface.
+- Valores em reais agora saem sempre com dois decimais. Antes um campo podia devolver `"0"` numa chamada e `"0.00"` na seguinte.
+
+Depende de `simples-nacional-complexo>=0.4.0`.
+
 ## 0.2.0
 
 - `quantificar_segregacao` responde quanto se paga a mais por não segregar receita monofásica ou com ICMS-ST. Informe a receita do mês repartida por categoria e ela devolve o DAS sem segregar, o segregado, e a diferença — que é indébito recuperável para quem revende.

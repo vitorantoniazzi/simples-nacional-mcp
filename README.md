@@ -25,6 +25,8 @@ A ferramenta `carga_fora_do_das` existe para que o assistente diga isso em vez d
 | `ressalvas_setoriais` | Setores com regime especial: bebidas alcoólicas e frias, medicamentos, cosméticos, autopeças, pneus, combustíveis |
 | `carga_fora_do_das` | O que a alíquota **não** cobre, e se cada item acrescenta ou reduz |
 | `quantificar_segregacao` | Quanto se paga a mais por não segregar receita monofásica ou com ICMS-ST |
+| `comparar_anexos` | Os cinco anexos por **carga total**, somando a CPP que o Anexo IV deixa fora do DAS |
+| `indebito_acumulado` | Indébito de várias competências, separando o que prescreveu |
 
 ## O número que ninguém calcula
 
@@ -39,6 +41,28 @@ Um bar no Anexo I, RBT12 de R$ 900 mil, receita mensal de R$ 80 mil sendo R$ 60 
 São 37% do DAS, quase R$ 29 mil por ano, e é indébito recuperável. Cerveja é monofásica de PIS/COFINS e tem ICMS-ST, então 49% da alíquota daquela faixa corresponde a tributos já recolhidos na cadeia.
 
 `quantificar_segregacao` calcula isso. Acima do sublimite ela avisa que segregar ICMS-ST não muda nada, porque ali o ICMS já não integra o DAS.
+
+## A armadilha do Anexo IV, quantificada
+
+RBT12 de R$ 1 milhão, receita mensal de R$ 80 mil, folha de R$ 30 mil:
+
+| Anexo | Alíquota do DAS | CPP por fora | Carga total |
+| --- | --- | --- | --- |
+| III | 12,44% | — | **12,44%** |
+| IV | **10,02%** | R$ 6.300 | **17,90%** |
+
+`comparar_anexos` soma o que fica fora do DAS e alerta quando a ordem por carga inverte a ordem por alíquota — que é o caso acima. Sem folha informada, ela avisa que a comparação subestima o Anexo IV.
+
+## E quanto dá para recuperar
+
+`indebito_acumulado` recebe as competências e devolve o total, separando o que ainda cabe no prazo de cinco anos:
+
+| | |
+| --- | --- |
+| 20 competências recentes | R$ 48.216,00 **recuperáveis** |
+| 2 competências de 2019 | R$ 4.821,60 **prescritos** |
+
+Prazo do art. 168 do CTN. A contagem usa o vencimento do DAS como referência do pagamento; pedido administrativo não interrompe o prazo.
 
 ## Instalação no Claude Code
 

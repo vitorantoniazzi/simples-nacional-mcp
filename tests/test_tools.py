@@ -22,6 +22,8 @@ TOOLS_ESPERADAS = {
     "ressalvas_setoriais",
     "carga_fora_do_das",
     "quantificar_segregacao",
+    "comparar_anexos",
+    "indebito_acumulado",
 }
 
 
@@ -283,3 +285,138 @@ class TestReparticaoNoCalcularDas:
         )
         assert out["das_por_tributo"]["ICMS"] == "2984.00"
         assert out["reparticao_da_faixa_pct"]["ICMS"] == "32.00"
+
+
+class TestCompararAnexos:
+    async def test_devolve_os_cinco_anexos(self) -> None:
+        out = await chamar("comparar_anexos", {"rbt12": "1000000", "receita_do_mes": "80000"})
+        assert [x["anexo"] for x in out["por_anexo"]] == ["I", "II", "III", "IV", "V"]
+
+    async def test_com_folha_o_anexo_iv_inverte(self) -> None:
+        out = await chamar(
+            "comparar_anexos",
+            {"rbt12": "1000000", "receita_do_mes": "80000", "folha": "30000"},
+        )
+        por = {x["anexo"]: x for x in out["por_anexo"]}
+        assert Decimal(por["IV"]["das"]) < Decimal(por["III"]["das"])
+        assert Decimal(por["IV"]["carga_total"]) > Decimal(por["III"]["carga_total"])
+        assert "parece mais barato" in out["alerta_anexo_iv"]
+
+    async def test_so_o_anexo_iv_tem_cpp_por_fora(self) -> None:
+        out = await chamar(
+            "comparar_anexos",
+            {"rbt12": "1000000", "receita_do_mes": "80000", "folha": "30000"},
+        )
+        for x in out["por_anexo"]:
+            tem = Decimal(x["cpp_fora_do_das"]) > 0
+            assert tem is (x["anexo"] == "IV"), x["anexo"]
+
+    async def test_sem_folha_o_alerta_avisa_que_subestima(self) -> None:
+        out = await chamar("comparar_anexos", {"rbt12": "1000000", "receita_do_mes": "80000"})
+        assert "subestima" in out["alerta_anexo_iv"]
+
+    async def test_rat_fora_da_faixa_e_recusado(self) -> None:
+        with pytest.raises(ToolError):
+            await server.call_tool(
+                "comparar_anexos",
+                {
+                    "rbt12": "1000000",
+                    "receita_do_mes": "80000",
+                    "folha": "30000",
+                    "rat_pct": 9,
+                },
+            )
+
+
+class TestIndebitoAcumulado:
+    def mes(self, ano: int, m: int) -> dict[str, Any]:
+        return {
+            "ano": ano,
+            "mes": m,
+            "rbt12": "900000",
+            "receita_sem_regime_especial": "20000",
+            "receita_monofasica_e_com_icms_st": "60000",
+        }
+
+    async def test_soma_as_competencias(self) -> None:
+        out = await chamar(
+            "indebito_acumulado",
+            {"anexo": "I", "competencias": [self.mes(2026, m) for m in range(1, 4)]},
+        )
+        assert out["recuperavel"] == str(Decimal("2410.80") * 3)
+        assert out["prescrito"] == "0.00"
+
+    async def test_separa_o_que_prescreveu(self) -> None:
+        out = await chamar(
+            "indebito_acumulado",
+            {"anexo": "I", "competencias": [self.mes(2019, 1), self.mes(2026, 1)]},
+        )
+        prescritas = [c for c in out["competencias"] if c["prescrito"]]
+        assert len(prescritas) == 1
+        assert prescritas[0]["ano"] == 2019
+        assert out["recuperavel"] == "2410.80"
+        assert out["prescrito"] == "2410.80"
+
+    async def test_informa_o_vencimento_de_cada_competencia(self) -> None:
+        out = await chamar(
+            "indebito_acumulado", {"anexo": "I", "competencias": [self.mes(2026, 12)]}
+        )
+        assert out["competencias"][0]["vencimento"] == "2027-01-20"
+
+    async def test_lista_vazia_e_recusada(self) -> None:
+        with pytest.raises(ToolError):
+            await server.call_tool("indebito_acumulado", {"anexo": "I", "competencias": []})
+
+    async def test_competencia_sem_campo_obrigatorio_e_recusada(self) -> None:
+        # Melhor recusar que inventar um RBT12.
+        with pytest.raises(ToolError):
+            await server.call_tool(
+                "indebito_acumulado",
+                {"anexo": "I", "competencias": [{"ano": 2026, "mes": 1}]},
+            )
+
+    async def test_sem_regime_especial_nao_gera_indebito(self) -> None:
+        out = await chamar(
+            "indebito_acumulado",
+            {
+                "anexo": "I",
+                "competencias": [
+                    {
+                        "ano": 2026,
+                        "mes": 1,
+                        "rbt12": "900000",
+                        "receita_sem_regime_especial": "80000",
+                    }
+                ],
+            },
+        )
+        assert out["total"] == "0.00"
+
+
+class TestFormatacaoMonetaria:
+    async def test_todo_valor_em_reais_tem_dois_decimais(self) -> None:
+        """Campo de dinheiro não deve alternar entre "0" e "0.00"."""
+        out = await chamar(
+            "indebito_acumulado",
+            {
+                "anexo": "I",
+                "competencias": [
+                    {
+                        "ano": 2026,
+                        "mes": 1,
+                        "rbt12": "900000",
+                        "receita_sem_regime_especial": "80000",
+                    }
+                ],
+            },
+        )
+        for campo in ("recuperavel", "prescrito", "total"):
+            assert (
+                out[campo].endswith(
+                    (".00", ".01", ".02", ".03", ".04", ".05", ".06", ".07", ".08", ".09")
+                )
+                or len(out[campo].split(".")[-1]) == 2
+            ), (campo, out[campo])
+        for c in out["competencias"]:
+            for campo in ("das_sem_segregar", "das_segregado", "indebito"):
+                assert len(c[campo].split(".")[-1]) == 2, (campo, c[campo])

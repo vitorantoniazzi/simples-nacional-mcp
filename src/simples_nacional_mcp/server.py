@@ -17,14 +17,19 @@ from mcp.server.mcpserver import MCPServer
 from simples_nacional import (
     TRIBUTOS_NO_DAS,
     Anexo,
+    Competencia,
     PosicaoNaCadeia,
     Tributo,
     aliquota_efetiva,
     anexo_por_fator_r,
     carga_fora_do_das,
+    comparar_anexos,
+    das_com_segregacao,
     das_devido,
     das_por_tributo,
     fator_r,
+    indebito_por_segregacao,
+    percentual_segregavel,
     reparticao_da_faixa,
     ressalvas_de,
     setores_registrados,
@@ -59,6 +64,15 @@ def _anexo(nome: str) -> Anexo:
         return _ANEXOS[nome.strip().upper()]
     except KeyError:
         raise ValueError(f"anexo inválido: {nome!r}. Use um de {', '.join(_ANEXOS)}.") from None
+
+
+def _reais(valor: Decimal) -> str:
+    """Formata dinheiro sempre com dois decimais.
+
+    Um consumidor da API não deve receber "0" numa chamada e "0.00" na
+    seguinte para o mesmo campo.
+    """
+    return str(valor.quantize(Decimal("0.01")))
 
 
 def _dinheiro(valor: float | int | str, campo: str) -> Decimal:
@@ -338,47 +352,49 @@ def quantificar_segregacao(
     receita_monofasica_e_com_icms_st: float | int | str = 0,
 ) -> dict[str, Any]:
     a = _anexo(anexo)
-    ap = aliquota_efetiva(_dinheiro(rbt12, "rbt12"), a)
-    pesos = reparticao_da_faixa(a, ap.faixa.numero)
-
-    zero = Decimal("0")
-    peso_monofasico = pesos.get(Tributo.PIS, zero) + pesos.get(Tributo.COFINS, zero)
-    peso_icms = pesos.get(Tributo.ICMS, zero)
+    base = _dinheiro(rbt12, "rbt12")
+    ap = aliquota_efetiva(base, a)
 
     baldes = [
-        ("sem_regime_especial", receita_sem_regime_especial, zero),
-        ("monofasica", receita_monofasica, peso_monofasico),
-        ("com_icms_st", receita_com_icms_st, peso_icms),
-        ("monofasica_e_com_icms_st", receita_monofasica_e_com_icms_st, peso_monofasico + peso_icms),
+        ("sem_regime_especial", receita_sem_regime_especial, False, False),
+        ("monofasica", receita_monofasica, True, False),
+        ("com_icms_st", receita_com_icms_st, False, True),
+        ("monofasica_e_com_icms_st", receita_monofasica_e_com_icms_st, True, True),
     ]
 
     cem = Decimal("100")
     detalhe = []
-    total_sem, total_com = zero, zero
-    for nome, valor, peso_fora in baldes:
+    total_sem = total_com = Decimal("0")
+    for nome, valor, mono, st in baldes:
         receita = _dinheiro(valor, nome)
         if receita < 0:
             raise ValueError(f"{nome} não pode ser negativa: {receita}")
         if receita == 0:
             continue
         sem = (receita * ap.aliquota_efetiva / cem).quantize(Decimal("0.01"))
-        fator = (cem - peso_fora) / cem
-        com = (receita * ap.aliquota_efetiva / cem * fator).quantize(Decimal("0.01"))
+        com = das_com_segregacao(receita, a, base, monofasica=mono, com_icms_st=st)
+        fora = percentual_segregavel(a, ap.faixa.numero, monofasica=mono, com_icms_st=st)
         total_sem += sem
         total_com += com
         detalhe.append(
             {
                 "categoria": nome,
                 "receita": str(receita),
-                "percentual_desconsiderado": str(peso_fora),
-                "das_sem_segregar": str(sem),
-                "das_segregado": str(com),
-                "economia": str(sem - com),
+                "percentual_desconsiderado": str(fora),
+                "das_sem_segregar": _reais(sem),
+                "das_segregado": _reais(com),
+                "economia": _reais(sem - com),
             }
         )
 
     if not detalhe:
         raise ValueError("informe ao menos uma das categorias de receita com valor maior que zero.")
+
+    pesos = reparticao_da_faixa(a, ap.faixa.numero)
+    icms_ausente = Tributo.ICMS not in pesos and (
+        _dinheiro(receita_com_icms_st, "x") > 0
+        or _dinheiro(receita_monofasica_e_com_icms_st, "x") > 0
+    )
 
     return {
         "anexo": a.value,
@@ -386,17 +402,151 @@ def quantificar_segregacao(
         "aliquota_efetiva_pct": str(ap.aliquota_arredondada),
         "reparticao_da_faixa_pct": {t.value: str(v) for t, v in pesos.items()},
         "por_categoria": detalhe,
-        "das_sem_segregar": str(total_sem),
-        "das_segregado": str(total_com),
-        "pago_a_mais_por_nao_segregar": str(total_sem - total_com),
+        "das_sem_segregar": _reais(total_sem),
+        "das_segregado": _reais(total_com),
+        "pago_a_mais_por_nao_segregar": _reais(total_sem - total_com),
         "observacao": (
             "Acima do sublimite o ICMS já não integra o DAS, então segregar "
             "receita com ICMS-ST não altera nada nesta faixa."
-            if Tributo.ICMS not in pesos
-            and (receita_com_icms_st or receita_monofasica_e_com_icms_st)
+            if icms_ausente
             else "A diferença é o indébito de quem revende sem segregar. "
             "Recuperá-lo depende de prazo prescricional e de escrituração; "
             "confirme com contador."
+        ),
+        "aviso": _AVISO,
+    }
+
+
+@server.tool(
+    name="comparar_anexos",
+    description=(
+        "Compara os cinco anexos por CARGA TOTAL, não por alíquota do DAS. "
+        "Informe a folha mensal: ela só altera o Anexo IV, único cujo DAS não "
+        "abrange a contribuição patronal, recolhida à parte a 20% sobre a "
+        "folha mais o RAT do grau de risco (1% a 3%, ajustável pelo FAP). "
+        "Sem a folha, a comparação reproduz a ilusão de que o Anexo IV é o "
+        "mais barato. Use esta ferramenta, e não calcular_das repetido, "
+        "sempre que a pergunta for qual anexo custa menos. "
+        "O anexo aplicável depende da atividade e não é escolha livre: isto "
+        "compara custos, não define enquadramento. " + _AVISO
+    ),
+)
+def comparar_anexos_tool(
+    rbt12: float | int | str,
+    receita_do_mes: float | int | str,
+    folha: float | int | str = 0,
+    rat_pct: float | int | str = 1,
+    fap: float | int | str = 1,
+) -> dict[str, Any]:
+    receita = _dinheiro(receita_do_mes, "receita_do_mes")
+    linhas = comparar_anexos(
+        _dinheiro(rbt12, "rbt12"),
+        receita,
+        folha=_dinheiro(folha, "folha"),
+        rat_pct=Decimal(str(rat_pct)),
+        fap=Decimal(str(fap)),
+    )
+    por_anexo = [
+        {
+            "anexo": c.anexo.value,
+            "anexo_descricao": c.anexo.descricao,
+            "faixa": c.faixa,
+            "aliquota_efetiva_pct": str(c.aliquota_efetiva_pct),
+            "das": str(c.das),
+            "cpp_fora_do_das": str(c.cpp_fora_do_das),
+            "carga_total": str(c.carga_total),
+            "carga_pct_da_receita": str(c.carga_pct_da_receita(receita)),
+        }
+        for c in linhas
+    ]
+    iii = next(c for c in linhas if c.anexo is Anexo.III)
+    iv = next(c for c in linhas if c.anexo is Anexo.IV)
+    inverteu = iv.das < iii.das and iv.carga_total > iii.carga_total
+    return {
+        "por_anexo": por_anexo,
+        "folha_informada": str(_dinheiro(folha, "folha")),
+        "alerta_anexo_iv": (
+            "Pela alíquota do DAS o Anexo IV parece mais barato que o Anexo III, "
+            "e pela carga total é mais caro. A diferença é a contribuição "
+            "patronal, que no Anexo IV fica fora do DAS."
+            if inverteu
+            else "Sem folha informada não há CPP a somar, e a comparação sai "
+            "pela alíquota do DAS apenas — o que subestima o Anexo IV."
+            if _dinheiro(folha, "folha") == 0
+            else "Nesta combinação de receita e folha a ordem por carga total "
+            "coincide com a ordem por alíquota."
+        ),
+        "aviso": _AVISO,
+    }
+
+
+@server.tool(
+    description=(
+        "Soma o indébito de vários meses de quem revendeu sem segregar receita "
+        "monofásica ou com ICMS-ST, e separa o que ainda está no prazo de cinco "
+        "anos do art. 168 do CTN do que já prescreveu. Passe uma lista de "
+        "competências, cada uma com ano, mes, rbt12 e a receita repartida por "
+        "categoria. A contagem do prazo usa o vencimento do DAS, dia 20 do mês "
+        "seguinte, como referência do pagamento; quem pagou em atraso conta da "
+        "data efetiva, que só o contribuinte conhece. Pedido administrativo não "
+        "interrompe o prazo. " + _AVISO
+    )
+)
+def indebito_acumulado(
+    anexo: AnexoNome,
+    competencias: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not competencias:
+        raise ValueError("informe ao menos uma competência.")
+    a = _anexo(anexo)
+    itens = []
+    for i, c in enumerate(competencias):
+        faltando = {"ano", "mes", "rbt12"} - set(c)
+        if faltando:
+            raise ValueError(f"competência {i} sem os campos obrigatórios: {sorted(faltando)}")
+        itens.append(
+            Competencia(
+                ano=int(c["ano"]),
+                mes=int(c["mes"]),
+                rbt12=_dinheiro(c["rbt12"], "rbt12"),
+                receita_sem_regime_especial=_dinheiro(
+                    c.get("receita_sem_regime_especial", 0), "receita_sem_regime_especial"
+                ),
+                receita_monofasica=_dinheiro(c.get("receita_monofasica", 0), "receita_monofasica"),
+                receita_com_icms_st=_dinheiro(
+                    c.get("receita_com_icms_st", 0), "receita_com_icms_st"
+                ),
+                receita_monofasica_e_com_icms_st=_dinheiro(
+                    c.get("receita_monofasica_e_com_icms_st", 0),
+                    "receita_monofasica_e_com_icms_st",
+                ),
+            )
+        )
+
+    r = indebito_por_segregacao(itens, a)
+    return {
+        "anexo": a.value,
+        "data_de_corte": r.data_de_corte.isoformat(),
+        "competencias": [
+            {
+                "ano": c.competencia.ano,
+                "mes": c.competencia.mes,
+                "vencimento": c.competencia.vencimento.isoformat(),
+                "faixa": c.faixa,
+                "das_sem_segregar": _reais(c.das_sem_segregar),
+                "das_segregado": _reais(c.das_segregado),
+                "indebito": _reais(c.indebito),
+                "prescrito": c.prescrito,
+            }
+            for c in r.competencias
+        ],
+        "recuperavel": _reais(r.recuperavel),
+        "prescrito": _reais(r.prescrito),
+        "total": _reais(r.total),
+        "observacao": (
+            "Recuperar depende de escrituração que comprove a segregação devida "
+            "e de via adequada (restituição ou compensação). O valor prescrito "
+            "consta apenas para dimensionar o que se perdeu."
         ),
         "aviso": _AVISO,
     }
